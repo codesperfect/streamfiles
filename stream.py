@@ -1,3 +1,4 @@
+# Stream.py
 import asyncio
 import websockets
 import json
@@ -7,63 +8,49 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-FILE_PATH = 'snake.js'  # Replace with your file path
-last_modified_time = 0
+OUTPUT_FOLDER = 'output/'  # Folder path to stream files from
 active_connections = set()
 
-async def file_monitor():
-    global last_modified_time
+async def file_monitor(websocket):
+    last_modified_times = {}
     while True:
         try:
-            current_modified_time = os.path.getmtime(FILE_PATH)
-            if current_modified_time > last_modified_time:
-                last_modified_time = current_modified_time
-                with open(FILE_PATH, 'r') as file:
-                    content = file.read()
-                await broadcast_file_content(content)
+            files = [f for f in os.listdir(OUTPUT_FOLDER) if os.path.isfile(os.path.join(OUTPUT_FOLDER, f))]
+            for file_name in files:
+                file_path = os.path.join(OUTPUT_FOLDER, file_name)
+                current_modified_time = os.path.getmtime(file_path)
+                
+                # Check if the file was modified or new
+                if file_name not in last_modified_times or current_modified_time > last_modified_times[file_name]:
+                    last_modified_times[file_name] = current_modified_time
+                    with open(file_path, 'r') as file:
+                        content = file.read()
+                    await websocket.send(json.dumps({
+                        "type": "code",
+                        "filename": file_name,
+                        "content": content,
+                        "language": "python"  # Adjust the language dynamically if needed
+                    }))
         except FileNotFoundError:
-            logging.error(f"File {FILE_PATH} not found.")
+            logging.error(f"File or directory {OUTPUT_FOLDER} not found.")
         except Exception as e:
-            logging.error(f"Error monitoring file: {e}")
-        await asyncio.sleep(1)
-
-async def broadcast_file_content(content):
-    if active_connections:
-        for websocket in active_connections.copy():
-            try:
-                await websocket.send(json.dumps({
-                    "type": "code",
-                    "content": content,
-                    "language": "python"
-                }))
-            except websockets.exceptions.ConnectionClosed:
-                active_connections.remove(websocket)
-                logging.info(f"Removed closed connection")
+            logging.error(f"Error monitoring files: {e}")
+        await asyncio.sleep(1)  # Wait before checking again
 
 async def websocket_handler(websocket, path):
     logging.info(f"New connection from {websocket.remote_address}")
     active_connections.add(websocket)
     try:
-        with open(FILE_PATH, 'r') as file:
-            content = file.read()
-        await websocket.send(json.dumps({
-            "type": "code",
-            "content": content,
-            "language": "python"
-        }))
+        await file_monitor(websocket)  # Monitor the files and send them to the client
         await websocket.wait_closed()
     finally:
         active_connections.remove(websocket)
         logging.info(f"Connection closed for {websocket.remote_address}")
 
 async def main():
-    server = await websockets.serve(
-        websocket_handler,
-        "localhost",
-        8765,
-    )
+    server = await websockets.serve(websocket_handler, "localhost", 8765)
     logging.info("WebSocket server started on ws://localhost:8765")
-    await asyncio.gather(server.wait_closed(), file_monitor())
+    await server.wait_closed()
 
 if __name__ == "__main__":
     try:

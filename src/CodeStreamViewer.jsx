@@ -5,14 +5,13 @@ import { FiCopy } from 'react-icons/fi';
 
 const CodeStreamViewer = () => {
   const [code, setCode] = useState('');
-  const [displayedCode, setDisplayedCode] = useState('');
+  const [filename, setFilename] = useState('');
   const [status, setStatus] = useState('Initializing...');
   const [error, setError] = useState(null);
   const ws = useRef(null);
   const reconnectAttempts = useRef(0);
-  const codeContainerRef = useRef(null); // Ref for the code container
   const maxReconnectAttempts = 5;
-  const typingSpeed = 1; // milliseconds per line
+  const codeContainerRef = useRef(null); // Ref for the code container
 
   const connectWebSocket = () => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
@@ -36,7 +35,8 @@ const CodeStreamViewer = () => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'code') {
-          setCode(data.content);
+          setFilename(data.filename);  // Update the filename
+          setCode(data.content || '');  // Update the code content, handle undefined content by using empty string
         }
       } catch (err) {
         setError(`Error parsing message: ${err.message}`);
@@ -67,33 +67,12 @@ const CodeStreamViewer = () => {
     };
   }, []);
 
-  useEffect(() => {
-    let timeout;
-    let currentLine = 0;
-    const codeLines = code.split('\n'); // Split code by lines
-
-    const typeNextLine = () => {
-      if (currentLine < codeLines.length) {
-        setDisplayedCode((prev) => prev + codeLines[currentLine] + '\n');
-        currentLine++;
-        timeout = setTimeout(typeNextLine, typingSpeed); // Add a new line every typingSpeed ms
-      }
-    };
-
-    if (code) {
-      setDisplayedCode(''); // Reset displayed code for new incoming code
-      typeNextLine();
-    }
-
-    return () => clearTimeout(timeout);
-  }, [code]);
-
   // Auto scroll when new code is displayed
   useEffect(() => {
     if (codeContainerRef.current) {
       codeContainerRef.current.scrollTop = codeContainerRef.current.scrollHeight;
     }
-  }, [displayedCode]);
+  }, [code]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -104,7 +83,7 @@ const CodeStreamViewer = () => {
   return (
     <div className="max-w-3xl w-full mx-auto p-4 bg-gray-900 text-gray-200 rounded-lg shadow-md">
       <div className="flex justify-between items-center mb-2 p-2 bg-gray-800 rounded-t-lg space-x-2">
-        <span className="text-sm text-gray-400 flex-grow">snake.js</span> {/* Ensures the filename occupies remaining space */}
+        <span className="text-sm text-gray-400 flex-grow">{filename || 'Waiting for file...'}</span> {/* Display the current filename */}
         <button
           onClick={handleCopy}
           className="flex items-center space-x-1 px-2 py-1 bg-gray-700 text-gray-400 hover:text-gray-200 rounded"
@@ -116,15 +95,15 @@ const CodeStreamViewer = () => {
       </div>
       <div className="mb-4 text-xs font-semibold text-blue-400">{status}</div>
       {error && <div className="mb-4 text-xs text-red-500">{error}</div>}
-      
+
       {/* Wrapper for SyntaxHighlighter with auto-scroll and max height */}
       <div
         ref={codeContainerRef} // Set ref for auto-scrolling
         className="overflow-auto" // Enable scrolling
-        style={{ maxHeight: '80vh' }} // Limit height to 90% of viewport
+        style={{ maxHeight: '80vh' }} // Limit height to 80% of viewport
       >
         <SyntaxHighlighter
-          language="javascript"
+          language="javascript" // Adjust this based on the language if needed
           style={vscDarkPlus}
           className="text-sm rounded-b-lg bg-gray-800"
           showLineNumbers={true}
@@ -142,7 +121,7 @@ const CodeStreamViewer = () => {
           }}
           lineNumberStyle={{ color: '#565c64' }}
         >
-          {displayedCode || 'Waiting for code...'}
+          {code || 'Waiting for code...'} {/* Ensure 'undefined' does not appear */}
         </SyntaxHighlighter>
       </div>
     </div>
