@@ -10,8 +10,9 @@ const CodeStreamViewer = () => {
   const [error, setError] = useState(null);
   const ws = useRef(null);
   const reconnectAttempts = useRef(0);
+  const codeContainerRef = useRef(null); // Ref for the code container
   const maxReconnectAttempts = 5;
-  const typingSpeed = 0; // milliseconds per character
+  const typingSpeed = 1; // milliseconds per line
 
   const connectWebSocket = () => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
@@ -68,22 +69,31 @@ const CodeStreamViewer = () => {
 
   useEffect(() => {
     let timeout;
-    let currentIndex = 0;
+    let currentLine = 0;
+    const codeLines = code.split('\n'); // Split code by lines
 
-    const typeNextCharacter = () => {
-      if (currentIndex < code.length) {
-        setDisplayedCode(code.slice(0, currentIndex + 1));
-        currentIndex++;
-        timeout = setTimeout(typeNextCharacter, typingSpeed);
+    const typeNextLine = () => {
+      if (currentLine < codeLines.length) {
+        setDisplayedCode((prev) => prev + codeLines[currentLine] + '\n');
+        currentLine++;
+        timeout = setTimeout(typeNextLine, typingSpeed); // Add a new line every typingSpeed ms
       }
     };
 
     if (code) {
-      typeNextCharacter();
+      setDisplayedCode(''); // Reset displayed code for new incoming code
+      typeNextLine();
     }
 
     return () => clearTimeout(timeout);
   }, [code]);
+
+  // Auto scroll when new code is displayed
+  useEffect(() => {
+    if (codeContainerRef.current) {
+      codeContainerRef.current.scrollTop = codeContainerRef.current.scrollHeight;
+    }
+  }, [displayedCode]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -93,26 +103,43 @@ const CodeStreamViewer = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto p-4 bg-gray-900 text-gray-200 rounded-lg shadow-md">
-      <div className="flex justify-between items-center mb-2 p-2 bg-gray-800 rounded-t-lg">
-        <span className="text-sm text-gray-400">snake.js</span>
+      <div className="flex justify-between items-center mb-2 p-2 bg-gray-800 rounded-t-lg space-x-2">
+        <span className="text-sm text-gray-400 flex-grow">snake.js</span> {/* Ensures the filename occupies remaining space */}
         <button
           onClick={handleCopy}
-          className="text-gray-400 hover:text-gray-200"
+          className="flex items-center space-x-1 px-2 py-1 bg-gray-700 text-gray-400 hover:text-gray-200 rounded"
           title="Copy Code"
         >
           <FiCopy size={16} />
+          <span className="text-xs">Copy</span>
         </button>
       </div>
       <div className="mb-4 text-xs font-semibold text-blue-400">{status}</div>
       {error && <div className="mb-4 text-xs text-red-500">{error}</div>}
-      <div>
+      
+      {/* Wrapper for SyntaxHighlighter with auto-scroll and max height */}
+      <div
+        ref={codeContainerRef} // Set ref for auto-scrolling
+        className="overflow-auto" // Enable scrolling
+        style={{ maxHeight: '80vh' }} // Limit height to 90% of viewport
+      >
         <SyntaxHighlighter
           language="javascript"
           style={vscDarkPlus}
           className="text-sm rounded-b-lg bg-gray-800"
           showLineNumbers={true}
           wrapLines={true}
-          customStyle={{ padding: '20px', borderRadius: '0 0 8px 8px', margin: '20px' }}
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            fontSize: "0.875rem",
+            lineHeight: "1.5",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            overflowWrap: "break-word",
+            maxWidth: "100%",
+            boxSizing: "border-box", // Ensure responsive width
+          }}
           lineNumberStyle={{ color: '#565c64' }}
         >
           {displayedCode || 'Waiting for code...'}
