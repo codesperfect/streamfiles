@@ -36,12 +36,16 @@ const CodeStreamViewer = () => {
         if (data.type === 'code') {
           // Check if the file already exists in the list before adding to prevent duplicates
           setFiles((prevFiles) => {
-            const fileExists = prevFiles.some((file) => file.filename === data.filename);
-            if (!fileExists) {
-              return [...prevFiles, { filename: data.filename, content: data.content || '' }];
+            const fileIndex = prevFiles.findIndex((file) => file.filename === data.filename);
+            if (fileIndex !== -1) {
+              // Update the content of the existing file
+              const updatedFiles = [...prevFiles];
+              updatedFiles[fileIndex] = { filename: data.filename, content: data.content || '' };
+              return updatedFiles;
             }
-            return prevFiles; // Return the previous state if the file already exists
+            return [...prevFiles, { filename: data.filename, content: data.content || '' }];
           });
+          
         }
       } catch (err) {
         setError(`Error parsing message: ${err.message}`);
@@ -94,11 +98,11 @@ const CodeStreamViewer = () => {
       <div
         ref={codeContainerRef} // Set ref for auto-scrolling
         className="overflow-auto" // Enable scrolling
-        style={{ maxHeight: '80vh' }} // Limit height to 80% of viewport
+        style={{ maxHeight: '90vh' }} // Limit height to 80% of viewport
       >
         {files.map((file, index) => (
-          <div key={index} className="mb-6 bg-gray-900 text-gray-200 shadow-md rounded-lg"> {/* Add margin between blocks */}
-            <div className="flex justify-between items-center mb-2 p-2 bg-gray-800 rounded-t-lg space-x-2">
+          <div key={index} className="mb-6 bg-gray-900 text-gray-200 shadow-md rounded-lg "> {/* Add margin between blocks */}
+            <div className="flex justify-between items-center p-2 bg-gray-800 rounded-t-lg space-x-2">
               <span className="text-sm text-gray-400 flex-grow">{file.filename}</span> {/* Display the filename */}
               <button
                 onClick={() => handleCopy(file.content)}

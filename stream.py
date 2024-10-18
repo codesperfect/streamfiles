@@ -1,4 +1,3 @@
-# Stream.py
 import asyncio
 import websockets
 import json
@@ -26,12 +25,17 @@ async def file_monitor(websocket):
                     last_modified_times[file_name] = current_modified_time
                     with open(file_path, 'r') as file:
                         content = file.read()
-                    await websocket.send(json.dumps({
-                        "type": "code",
-                        "filename": file_name,
-                        "content": content,
-                        "language": "python"  # Adjust the language dynamically if needed
-                    }))
+                        file.flush()  # Ensure all content is read
+
+                    if content.strip():  # Only send non-empty content
+                        await websocket.send(json.dumps({
+                            "type": "code",
+                            "filename": file_name,
+                            "content": content,
+                            "language": "python"  # Adjust the language dynamically if needed
+                        }))
+                    else:
+                        logging.warning(f"File {file_name} has no content.")
         except FileNotFoundError:
             logging.error(f"File or directory {OUTPUT_FOLDER} not found.")
         except Exception as e:
