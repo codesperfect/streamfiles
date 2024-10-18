@@ -4,8 +4,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { FiCopy } from 'react-icons/fi';
 
 const CodeStreamViewer = () => {
-  const [code, setCode] = useState('');
-  const [filename, setFilename] = useState('');
+  const [files, setFiles] = useState([]); // Array of { filename, content }
   const [status, setStatus] = useState('Initializing...');
   const [error, setError] = useState(null);
   const ws = useRef(null);
@@ -35,8 +34,14 @@ const CodeStreamViewer = () => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'code') {
-          setFilename(data.filename);  // Update the filename
-          setCode(data.content || '');  // Update the code content, handle undefined content by using empty string
+          // Check if the file already exists in the list before adding to prevent duplicates
+          setFiles((prevFiles) => {
+            const fileExists = prevFiles.some((file) => file.filename === data.filename);
+            if (!fileExists) {
+              return [...prevFiles, { filename: data.filename, content: data.content || '' }];
+            }
+            return prevFiles; // Return the previous state if the file already exists
+          });
         }
       } catch (err) {
         setError(`Error parsing message: ${err.message}`);
@@ -67,62 +72,66 @@ const CodeStreamViewer = () => {
     };
   }, []);
 
-  // Auto scroll when new code is displayed
+  // Auto scroll when new files are added
   useEffect(() => {
     if (codeContainerRef.current) {
       codeContainerRef.current.scrollTop = codeContainerRef.current.scrollHeight;
     }
-  }, [code]);
+  }, [files]);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
+  const handleCopy = (content) => {
+    navigator.clipboard.writeText(content);
     setStatus('Copied to clipboard!');
     setTimeout(() => setStatus('Connected'), 2000);
   };
 
   return (
-    <div className="max-w-3xl w-full mx-auto p-4 bg-gray-900 text-gray-200 rounded-lg shadow-md">
-      <div className="flex justify-between items-center mb-2 p-2 bg-gray-800 rounded-t-lg space-x-2">
-        <span className="text-sm text-gray-400 flex-grow">{filename || 'Waiting for file...'}</span> {/* Display the current filename */}
-        <button
-          onClick={handleCopy}
-          className="flex items-center space-x-1 px-2 py-1 bg-gray-700 text-gray-400 hover:text-gray-200 rounded"
-          title="Copy Code"
-        >
-          <FiCopy size={16} />
-          <span className="text-xs">Copy</span>
-        </button>
-      </div>
+    <div className="max-w-3xl w-full mx-auto p-4 rounded-lg ">
       <div className="mb-4 text-xs font-semibold text-blue-400">{status}</div>
       {error && <div className="mb-4 text-xs text-red-500">{error}</div>}
 
-      {/* Wrapper for SyntaxHighlighter with auto-scroll and max height */}
+      {/* Wrapper for all code blocks with auto-scroll and max height */}
       <div
         ref={codeContainerRef} // Set ref for auto-scrolling
         className="overflow-auto" // Enable scrolling
         style={{ maxHeight: '80vh' }} // Limit height to 80% of viewport
       >
-        <SyntaxHighlighter
-          language="javascript" // Adjust this based on the language if needed
-          style={vscDarkPlus}
-          className="text-sm rounded-b-lg bg-gray-800"
-          showLineNumbers={true}
-          wrapLines={true}
-          customStyle={{
-            margin: 0,
-            padding: "1rem",
-            fontSize: "0.875rem",
-            lineHeight: "1.5",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            overflowWrap: "break-word",
-            maxWidth: "100%",
-            boxSizing: "border-box", // Ensure responsive width
-          }}
-          lineNumberStyle={{ color: '#565c64' }}
-        >
-          {code || 'Waiting for code...'} {/* Ensure 'undefined' does not appear */}
-        </SyntaxHighlighter>
+        {files.map((file, index) => (
+          <div key={index} className="mb-6 bg-gray-900 text-gray-200 shadow-md rounded-lg"> {/* Add margin between blocks */}
+            <div className="flex justify-between items-center mb-2 p-2 bg-gray-800 rounded-t-lg space-x-2">
+              <span className="text-sm text-gray-400 flex-grow">{file.filename}</span> {/* Display the filename */}
+              <button
+                onClick={() => handleCopy(file.content)}
+                className="flex items-center space-x-1 px-2 py-1 bg-gray-700 text-gray-400 hover:text-gray-200 rounded"
+                title="Copy Code"
+              >
+                <FiCopy size={16} />
+                <span className="text-xs">Copy</span>
+              </button>
+            </div>
+            <SyntaxHighlighter
+              language="javascript" // Adjust this based on the language if needed
+              style={vscDarkPlus}
+              className="text-sm rounded-b-lg bg-gray-800"
+              showLineNumbers={true}
+              wrapLines={true}
+              customStyle={{
+                margin: 0,
+                padding: "1rem",
+                fontSize: "0.875rem",
+                lineHeight: "1.5",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                overflowWrap: "break-word",
+                maxWidth: "100%",
+                boxSizing: "border-box", // Ensure responsive width
+              }}
+              lineNumberStyle={{ color: '#565c64' }}
+            >
+              {file.content || 'No content available...'} {/* Display file content */}
+            </SyntaxHighlighter>
+          </div>
+        ))}
       </div>
     </div>
   );

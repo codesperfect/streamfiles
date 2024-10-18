@@ -15,12 +15,13 @@ async def file_monitor(websocket):
     last_modified_times = {}
     while True:
         try:
+            # Get a list of all files in the output directory
             files = [f for f in os.listdir(OUTPUT_FOLDER) if os.path.isfile(os.path.join(OUTPUT_FOLDER, f))]
             for file_name in files:
                 file_path = os.path.join(OUTPUT_FOLDER, file_name)
                 current_modified_time = os.path.getmtime(file_path)
                 
-                # Check if the file was modified or new
+                # Check if the file was modified or is new
                 if file_name not in last_modified_times or current_modified_time > last_modified_times[file_name]:
                     last_modified_times[file_name] = current_modified_time
                     with open(file_path, 'r') as file:
@@ -35,7 +36,7 @@ async def file_monitor(websocket):
             logging.error(f"File or directory {OUTPUT_FOLDER} not found.")
         except Exception as e:
             logging.error(f"Error monitoring files: {e}")
-        await asyncio.sleep(1)  # Wait before checking again
+        await asyncio.sleep(1)  # Sleep before checking again
 
 async def websocket_handler(websocket, path):
     logging.info(f"New connection from {websocket.remote_address}")
