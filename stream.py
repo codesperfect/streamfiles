@@ -8,12 +8,15 @@ import fnmatch
 from collections import deque
 import difflib
 
+# Global limit for the number of files to send
+LIMIT = 1
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 active_connections = set()
-file_queue = deque()
+file_queue = deque(maxlen=LIMIT)  # Set maxlen to LIMIT so deque only holds latest LIMIT items
 BASE_PATH = 'code_gen/'  # Set the base path
 
 def get_ignore_patterns(folder_path):
@@ -111,21 +114,23 @@ async def file_monitor():
 
                                 diff = list(difflib.ndiff(previous_content.splitlines(), current_content.splitlines()))
 
-                                file_data = {
-                                    "type": file_type,
-                                    "filename": str(path),
-                                    "content": current_content,
-                                    "previous_content": previous_content,
-                                    "diff": diff,
-                                    "language": language,
-                                    "action": "update"
-                                }
+                                # Stream only if there are diffs (i.e., if diff is non-empty)
+                                if diff:
+                                    file_data = {
+                                        "type": file_type,
+                                        "filename": str(path),
+                                        "content": current_content,
+                                        "previous_content": previous_content,
+                                        "diff": diff,
+                                        "language": language,
+                                        "action": "update"
+                                    }
 
-                                previous_contents[str(path)] = current_content  # Update previous content to current
-                                
-                                # Remove old version if exists
-                                file_queue = deque(filter(lambda x: x['filename'] != str(path), file_queue))
-                                file_queue.append(file_data)
+                                    previous_contents[str(path)] = current_content  # Update previous content to current
+                                    
+                                    # Remove old version if exists and add new file data
+                                    file_queue = deque(filter(lambda x: x['filename'] != str(path), file_queue), maxlen=LIMIT)
+                                    file_queue.append(file_data)
 
             for path in list(last_modified_times.keys()):
                 if path not in current_files:

@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import DiffViewer from 'react-diff-viewer'; // Correct import
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'; // Light theme
+import DiffMatchPatch from 'diff-match-patch';
+
+const dmp = new DiffMatchPatch();
 
 const CodeStreamViewer = () => {
   const [fileQueue, setFileQueue] = useState([]);
@@ -90,15 +94,48 @@ const CodeStreamViewer = () => {
     }
   }, [displayedFiles]);
 
+  // Modify diffs to generate styled React elements for inserted/removed content
+  const generateDiffElements = (previousContent, currentContent, language) => {
+    const diffs = dmp.diff_main(previousContent, currentContent);
+    dmp.diff_cleanupSemantic(diffs);
+
+    return diffs.map((part, index) => {
+      const [type, text] = part;
+
+      if (type === DiffMatchPatch.DIFF_DELETE) {
+        // Removed content (deleted content) with red color and strikethrough
+        return (
+          <span key={index} style={{ color: 'red', textDecoration: 'line-through' }}>
+            {text + '\n'}
+          </span>
+        );
+      } else {
+        // Inserted or unchanged content
+        return (
+          <SyntaxHighlighter
+            key={index}
+            language={language}
+            style={vscDarkPlus} // Use a light theme for code highlighting
+            showLineNumbers={true} // Show line numbers
+            wrapLines={false} // Don't wrap lines, display as is
+            lineProps={{
+              style: { whiteSpace: 'pre', wordBreak: 'normal' },
+            }}
+          >
+            {text}
+          </SyntaxHighlighter>
+        );
+      }
+    });
+  };
+
   const renderFileContent = (fileData) => {
+    const diffElements = generateDiffElements(fileData.previousContent, fileData.currentContent, fileData.language);
+
     return (
-      <DiffViewer
-        oldValue={fileData.previousContent} // The previous content
-        newValue={fileData.currentContent}  // The current content
-        splitView={true}                    // Shows side-by-side diff. Use false for inline diff.
-        showLineNumbers={true}              // Show line numbers
-        useDarkTheme={true}                 // Dark theme (optional)
-      />
+      <div style={{  borderRadius: '20px' }}> {/* Light background */}
+        {diffElements}
+      </div>
     );
   };
 
