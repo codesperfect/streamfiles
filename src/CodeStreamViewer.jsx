@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { FiCopy } from 'react-icons/fi';
+import DiffViewer from 'react-diff-viewer'; // Correct import
 
 const CodeStreamViewer = () => {
   const [fileQueue, setFileQueue] = useState([]);
@@ -13,20 +11,6 @@ const CodeStreamViewer = () => {
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
   const codeContainerRef = useRef(null);
- 
-
-  const convertWatchUrl = (url, port) => {
-    console.log("url", url);
-    if (!url) return '';
-    
-    // Take only the first IP match if there are multiple
-    const match = url.match(/(\d+\.\d+\.\d+\.\d+)/);
-    if (match) {
-        // Use match[1] to get just the IP address from the match
-        return `ws://${match[1]}:${port}`;
-    }
-    return '';
-}
 
   const connectWebSocket = () => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
@@ -37,7 +21,6 @@ const CodeStreamViewer = () => {
     setStatus(`Attempting to connect (Attempt ${reconnectAttempts.current + 1})...`);
     setError(null);
 
-    // const wsUrl = convertWatchUrl(currentIframeUrl , 8764);
     const wsUrl = 'ws://localhost:8764';
     ws.current = new WebSocket(wsUrl);
     
@@ -84,18 +67,14 @@ const CodeStreamViewer = () => {
       if (fileQueue.length > 0 && !currentStreaming) {
         const nextFile = fileQueue[0];
         setCurrentStreaming(nextFile.filename);
-        
-        const lines = nextFile.content.split('\n');
-        let displayedContent = '';
 
-        for (let i = 0; i < lines.length; i++) {
-          displayedContent += (i > 0 ? '\n' : '') + lines[i];
-          setDisplayedFiles(prev => [
-            ...prev.filter(f => f.filename !== nextFile.filename),
-            { ...nextFile, displayedContent }
-          ]);
-          await new Promise(resolve => setTimeout(resolve, 1));
-        }
+        const previousContent = nextFile.previous_content || '';
+        const currentContent = nextFile.content || '';
+
+        setDisplayedFiles(prev => [
+          ...prev.filter(f => f.filename !== nextFile.filename),
+          { ...nextFile, previousContent, currentContent }
+        ]);
 
         setFileQueue(prev => prev.slice(1));
         setCurrentStreaming(null);
@@ -111,35 +90,15 @@ const CodeStreamViewer = () => {
     }
   }, [displayedFiles]);
 
-  const handleCopy = (content) => {
-    navigator.clipboard.writeText(content);
-    setStatus('Copied to clipboard!');
-    setTimeout(() => setStatus('Connected'), 2000);
-  };
-
   const renderFileContent = (fileData) => {
     return (
-      <SyntaxHighlighter
-        language={fileData.language}
-        style={vscDarkPlus}
-        className="text-sm rounded-b-lg bg-gray-800"
-        showLineNumbers={true}
-        wrapLines={true}
-        customStyle={{
-          margin: 0,
-          padding: "1rem",
-          fontSize: "0.875rem",
-          lineHeight: "1.5",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          overflowWrap: "break-word",
-          maxWidth: "100%",
-          boxSizing: "border-box",
-        }}
-        lineNumberStyle={{ color: '#565c64' }}
-      >
-        {fileData.displayedContent || 'No content available...'}
-      </SyntaxHighlighter>
+      <DiffViewer
+        oldValue={fileData.previousContent} // The previous content
+        newValue={fileData.currentContent}  // The current content
+        splitView={true}                    // Shows side-by-side diff. Use false for inline diff.
+        showLineNumbers={true}              // Show line numbers
+        useDarkTheme={true}                 // Dark theme (optional)
+      />
     );
   };
 
@@ -157,14 +116,6 @@ const CodeStreamViewer = () => {
           <div key={fileData.filename} className="mb-6 bg-gray-900 text-gray-200 shadow-md rounded-lg">
             <div className="flex justify-between items-center p-2 bg-gray-800 rounded-t-lg space-x-2">
               <span className="text-sm text-gray-400 flex-grow">{fileData.filename}</span>
-              <button
-                onClick={() => handleCopy(fileData.content)}
-                className="flex items-center space-x-1 px-2 py-1 bg-gray-700 text-gray-400 hover:text-gray-200 rounded"
-                title="Copy Code"
-              >
-                <FiCopy size={16} />
-                <span className="text-xs">Copy</span>
-              </button>
             </div>
             {renderFileContent(fileData)}
           </div>

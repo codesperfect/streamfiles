@@ -6,9 +6,11 @@ import logging
 from pathlib import Path
 import fnmatch
 from collections import deque
+import difflib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 active_connections = set()
 file_queue = deque()
@@ -38,7 +40,7 @@ def should_ignore(path, ignore_patterns):
     if path.name == '.gitignore':
         return True
 
-     # Add explicit checks for swap files
+    # Add explicit checks for swap files
     if path_str.endswith('.swp') or path_str.endswith('~'):
         return True
 
@@ -59,29 +61,35 @@ def get_file_info(file_path):
     _, ext = os.path.splitext(file_path)
     return 'text', ext.lstrip('.') or 'txt'
 
+def get_file_content(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except UnicodeDecodeError:
+        logging.warning(f"File {file_path} could not be read as UTF-8. Skipping.")
+        return None
+
 async def file_monitor():
     global file_queue
     
-    # Check if base path exists
     if not os.path.exists(BASE_PATH):
         logging.error(f"Base path {BASE_PATH} does not exist")
         return
 
-    # Get all subdirectories in the base path
     subdirs = [BASE_PATH]
     for item in os.listdir(BASE_PATH):
         full_path = os.path.join(BASE_PATH, item)
         if os.path.isdir(full_path):
             subdirs.append(full_path)
 
-    # Monitor files in each subdirectory
     last_modified_times = {}
+    previous_contents = {}
+
     while True:
         try:
             current_files = set()
             
             for dir_path in subdirs:
-                # Get ignore patterns for this directory
                 ignore_patterns = get_ignore_patterns(dir_path)
                 
                 for root, dirs, files in os.walk(dir_path):
@@ -90,40 +98,43 @@ async def file_monitor():
                         if not should_ignore(path, ignore_patterns):
                             current_files.add(str(path))
                             current_modified_time = os.path.getmtime(path)
-                            
+                            current_content = get_file_content(str(path))
+
+                            if current_content is None:
+                                continue
+
                             if str(path) not in last_modified_times or current_modified_time > last_modified_times[str(path)]:
                                 last_modified_times[str(path)] = current_modified_time
-                                file_type, language = get_file_info(str(path))
                                 
-                                try:
-                                    with open(path, 'r', encoding='utf-8') as file:
-                                        content = file.read()
-                                except UnicodeDecodeError:
-                                    logging.warning(f"File {path} could not be read as UTF-8. Skipping.")
-                                    continue
+                                previous_content = previous_contents.get(str(path), "")
+                                file_type, language = get_file_info(str(path))
 
-                                if content:  # Only queue non-empty content
-                                    file_data = {
-                                        "type": file_type,
-                                        "filename": str(path),
-                                        "content": content,
-                                        "language": language,
-                                        "action": "update"
-                                    }
-                                    # Remove old version if exists
-                                    file_queue = deque(filter(lambda x: x['filename'] != str(path), file_queue))
-                                    file_queue.append(file_data)
-                                else:
-                                    logging.warning(f"File {path} has no content.")
-            
-            # Remove files that no longer exist
+                                diff = list(difflib.ndiff(previous_content.splitlines(), current_content.splitlines()))
+
+                                file_data = {
+                                    "type": file_type,
+                                    "filename": str(path),
+                                    "content": current_content,
+                                    "previous_content": previous_content,
+                                    "diff": diff,
+                                    "language": language,
+                                    "action": "update"
+                                }
+
+                                previous_contents[str(path)] = current_content  # Update previous content to current
+                                
+                                # Remove old version if exists
+                                file_queue = deque(filter(lambda x: x['filename'] != str(path), file_queue))
+                                file_queue.append(file_data)
+
             for path in list(last_modified_times.keys()):
                 if path not in current_files:
                     del last_modified_times[path]
+                    del previous_contents[path]
 
         except Exception as e:
             logging.error(f"Error monitoring files: {e}")
-        await asyncio.sleep(1)  # Sleep before checking again
+        await asyncio.sleep(1)
 
 async def send_updates(websocket):
     global file_queue
