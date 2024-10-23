@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   FaFolderOpen,
+  FaFolder,
   FaFileAlt,
-  FaFileCode,
   FaFileCsv,
   FaFilePdf,
   FaJsSquare,
@@ -17,13 +17,15 @@ const WebSocketURL = "ws://localhost:6789"; // Replace with your WebSocket serve
 const Diff2HtmlComponent = () => {
   const [files, setFiles] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [latestStreamedFile, setLatestStreamedFile] = useState(null);
   const [diffHtml, setDiffHtml] = useState("");
-  const ws = useRef(null); // Use a ref to persist WebSocket between renders
-  const reconnectTimeout = useRef(null); // Use ref to keep track of reconnection timeout
+  const [openFolders, setOpenFolders] = useState({});
+  const ws = useRef(null);
+  const reconnectTimeout = useRef(null);
 
+  // Helper function to transform flat file paths into a nested tree structure
   const buildFileTree = (fileList) => {
     const fileTree = {};
-
     fileList.forEach((file) => {
       const parts = file.filepath.split("/");
       let current = fileTree;
@@ -39,7 +41,6 @@ const Diff2HtmlComponent = () => {
         }
       });
     });
-
     return fileTree;
   };
 
@@ -53,27 +54,19 @@ const Diff2HtmlComponent = () => {
         const fileIndex = prevFiles.findIndex(
           (file) => file.filepath === fileData.filepath
         );
-
         if (fileIndex !== -1) {
           const updatedFiles = [...prevFiles];
           updatedFiles[fileIndex] = { ...updatedFiles[fileIndex], ...fileData };
-
           if (selectedFile && fileData.filepath === selectedFile.filepath) {
             setSelectedFile(fileData);
-            renderDiff(fileData); // Live update of diff for the selected file
           }
-
           return updatedFiles;
         } else {
           return [...prevFiles, fileData];
         }
       });
 
-      // Auto-select the latest file if no file is selected
-      if (!selectedFile) {
-        setSelectedFile(fileData);
-        renderDiff(fileData); // Render the latest file's diff
-      }
+      setLatestStreamedFile(fileData);
     };
 
     ws.current.onclose = () => {
@@ -89,7 +82,6 @@ const Diff2HtmlComponent = () => {
 
   useEffect(() => {
     connectWebSocket();
-
     return () => {
       if (ws.current) ws.current.close();
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
@@ -98,20 +90,19 @@ const Diff2HtmlComponent = () => {
 
   const getFileIcon = (filename) => {
     const extension = filename.split(".").pop().toLowerCase();
-
     switch (extension) {
       case "js":
-        return <FaJsSquare className="file-icon" style={{ color: "#F7DF1E" }} />;
+        return <FaJsSquare className="text-yellow-500 mr-1" />;
       case "py":
-        return <FaPython className="file-icon" style={{ color: "#3776AB" }} />;
+        return <FaPython className="text-blue-500 mr-1" />;
       case "html":
-        return <FaHtml5 className="file-icon" style={{ color: "#E34F26" }} />;
+        return <FaHtml5 className="text-orange-600 mr-1" />;
       case "pdf":
-        return <FaFilePdf className="file-icon" style={{ color: "#FF0000" }} />;
+        return <FaFilePdf className="text-red-500 mr-1" />;
       case "csv":
-        return <FaFileCsv className="file-icon" style={{ color: "#008080" }} />;
+        return <FaFileCsv className="text-teal-600 mr-1" />;
       default:
-        return <FaFileAlt className="file-icon" />;
+        return <FaFileAlt className="mr-1" />;
     }
   };
 
@@ -123,32 +114,40 @@ const Diff2HtmlComponent = () => {
       <>
         {folderEntries.map(([folderName, folderContent]) => {
           const fullPath = `${folderPath}/${folderName}`;
+          const isOpen = openFolders[fullPath] !== false;
 
           return (
-            <li key={fullPath} className="file-item">
-              <div className="file-entry">
-                <FaFolderOpen className="folder-icon" />
-                <span>{folderName}</span>
+            <li key={fullPath} className="mb-0.5">
+              <div
+                className="flex items-center cursor-pointer text-gray-700"
+                onClick={() => handleFolderClick(fullPath)}
+              >
+                {isOpen ? <FaFolderOpen /> : <FaFolder />}
+                <span className="ml-1">{folderName}</span>
               </div>
-              <ul className="nested-files">
-                {renderFileTree(folderContent, fullPath)}
-              </ul>
+              {isOpen && (
+                <ul className="ml-5">
+                  {renderFileTree(folderContent, fullPath)}
+                </ul>
+              )}
             </li>
           );
         })}
         {fileEntries.map((file) => (
           <li
             key={file.filepath}
-            className="file-item"
+            className={`px-1 py-0.5 flex items-center cursor-pointer hover:bg-gray-200 ${
+              selectedFile?.filepath === file.filepath
+                ? "bg-gray-300 rounded px-2"
+                : ""
+            }`}
             onClick={() => handleFileClick(file)}
           >
-            <div className="file-entry">
-              {getFileIcon(file.filename)}
-              <span>{file.filename}</span>
-              {file.diff && (
-                <span className="file-changes">{getDiffCount(file.diff)}</span>
-              )}
-            </div>
+            {getFileIcon(file.filename)}
+            <span className="truncate flex-1 ">{file.filename}</span>
+            {file.diff && (
+              <span className="ml-auto sticky right-0">{getDiffCount(file.diff)}</span>
+            )}
           </li>
         ))}
       </>
@@ -156,25 +155,33 @@ const Diff2HtmlComponent = () => {
   };
 
   const getDiffCount = (diff) => {
-    const addedLines = (diff.match(/^\+[^+]/gm) || []).length; // Count only actual added lines (ignore diff markers)
-    const removedLines = (diff.match(/^\-[^-]/gm) || []).length; // Count only actual removed lines (ignore diff markers)
-  
+    const addedLines = (diff.match(/^\+[^+]/gm) || []).length;
+    const removedLines = (diff.match(/^\-[^-]/gm) || []).length;
     return (
-      <span>
-        <span style={{ color: "green", marginLeft: "10px" }}>
-          +{addedLines}
-        </span>
-        <span style={{ color: "red", marginLeft: "5px" }}>
-          -{removedLines}
-        </span>
+      <span className="sticky right-0">
+        <span className="text-green-500">+{addedLines}</span>
+        <span className="text-red-500 ml-1">-{removedLines}</span>
       </span>
     );
   };
-  
 
   const handleFileClick = (file) => {
-    setSelectedFile(file);
-    renderDiff(file);
+    if (selectedFile && file.filepath === selectedFile.filepath) {
+      setSelectedFile(null);
+      if (latestStreamedFile) {
+        renderDiff(latestStreamedFile);
+      }
+    } else {
+      setSelectedFile(file);
+      renderDiff(file);
+    }
+  };
+
+  const handleFolderClick = (folderPath) => {
+    setOpenFolders((prevOpenFolders) => ({
+      ...prevOpenFolders,
+      [folderPath]: !prevOpenFolders[folderPath],
+    }));
   };
 
   const renderDiff = (file) => {
@@ -187,25 +194,30 @@ const Diff2HtmlComponent = () => {
     }
   };
 
+  useEffect(() => {
+    if (!selectedFile && latestStreamedFile) {
+      renderDiff(latestStreamedFile);
+    }
+  }, [latestStreamedFile, selectedFile]);
+
   const fileTree = buildFileTree(files);
 
   return (
-    <div className="container">
-      <div className="sidebar">
-        <ul className="file-structure">{renderFileTree(fileTree)}</ul>
-      </div>
-      <div className="content">
-        {selectedFile ? (
-          <>
-            <h3>{selectedFile.filename}</h3>
-            <div
-              className="diff-viewer"
-              dangerouslySetInnerHTML={{ __html: diffHtml }}
-            />
-          </>
-        ) : (
-          <p>Select a file to view its content and diff.</p>
-        )}
+    <div className="container mx-auto flex h-screen">
+      {/* Sidebar */}
+      <div className="w-48 border-r-2 border-gray-300 p-1 overflow-y-auto overflow-x-hidden pr-5 h-full">
+        <ul>{renderFileTree(fileTree)}</ul>
+      </div>    
+
+      {/* Diff Viewer */}
+      <div className="w-full p-1 overflow-auto">
+        <h3 className="text-lg font-semibold mb-1">
+          {selectedFile ? selectedFile.filename : latestStreamedFile?.filename || "Latest Streamed File"}
+        </h3>
+        <div
+          className="bg-white border border-gray-300 p-2 rounded shadow overflow-x-auto"
+          dangerouslySetInnerHTML={{ __html: diffHtml }}
+        />
       </div>
     </div>
   );
