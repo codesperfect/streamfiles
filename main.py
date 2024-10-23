@@ -2,18 +2,18 @@ import time
 import os
 import difflib
 import json
-import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 class WatchdogHandler(FileSystemEventHandler):
-    def __init__(self, workspace_path, project_folder, skip_files):
+    def __init__(self, workspace_path, project_folder, skip_files, diffs_path):
         super().__init__()
         self.workspace_path = workspace_path
         self.project_folder = project_folder
         self.skip_files = skip_files
-        self.previous_contents = {}  # Store the previous file content
+        self.diffs_path = diffs_path  # Separate diffs directory
         self.ignore_file_list = self._load_gitignore_file()
+        os.makedirs(self.diffs_path, exist_ok=True)  # Ensure the diffs directory exists
 
     def on_modified(self, event):
         if event.is_directory:
@@ -46,6 +46,9 @@ class WatchdogHandler(FileSystemEventHandler):
         filename = os.path.basename(file_path)
         file_extension = os.path.splitext(filename)[1]  # Get the file extension
 
+        # Define the diff file path where the previous version of this file will be stored in the separate diffs directory
+        diff_file_path = os.path.join(self.diffs_path, f"{relative_path.replace('/', '_')}_prev")
+
         # Read current content of the file
         try:
             with open(file_path, 'r') as f:
@@ -54,14 +57,26 @@ class WatchdogHandler(FileSystemEventHandler):
             print(f"Error reading current content of {file_path}: {e}")
             return
 
-        # Get previous content if it exists
-        previous_code = self.previous_contents.get(file_path, "")
+        # Read previous content from the diffs, if available
+        if os.path.exists(diff_file_path):
+            with open(diff_file_path, 'r') as f:
+                previous_code = f.read()
+        else:
+            previous_code = ""  # If no previous version exists, assume it's a new file
 
-        # Generate the diff between previous and current code using Git
-        diff_text = self.get_git_diff(file_path)
+        # Generate the diff between previous and current code
+        diff = difflib.unified_diff(
+            previous_code.splitlines(),
+            current_code.splitlines(),
+            lineterm='',
+            fromfile='previous_code',
+            tofile='current_code'
+        )
+        diff_text = "\n".join(diff)
 
-        # Update the previous content with the current content
-        self.previous_contents[file_path] = current_code
+        # Save the current version as the "previous" version for the next modification
+        with open(diff_file_path, 'w') as f:
+            f.write(current_code)
 
         # Create a JSON structure
         file_change_data = {
@@ -76,20 +91,6 @@ class WatchdogHandler(FileSystemEventHandler):
         # Print the JSON structure (or you can save it to a file)
         json_output = json.dumps(file_change_data, indent=4)
         print(json_output)  # Print the JSON structure
-
-    def get_git_diff(self, file_path):
-        """Get the git diff for the file against its latest committed state."""
-        try:
-            result = subprocess.run(
-                ["git", "diff", "HEAD", "--", file_path],
-                capture_output=True,
-                text=True,
-                cwd=self.project_folder  # Ensure we're running git in the project folder
-            )
-            return result.stdout.strip()  # Return the git diff output
-        except Exception as e:
-            print(f"Error running git diff for {file_path}: {e}")
-            return ""
 
     def _load_gitignore_file(self):
         """Load the .gitignore file if it exists and return a list of ignored patterns."""
@@ -135,32 +136,6 @@ class WatchdogHandler(FileSystemEventHandler):
 
         return False
 
-    def print_most_recently_modified_file(self):
-        """Print the most recently modified file in the project folder."""
-        most_recent_file = None
-        most_recent_time = None
-
-        # Walk through the project folder and subdirectories to find the most recently modified file
-        for root, dirs, files in os.walk(self.project_folder):
-            for file in files:
-                file_path = os.path.join(root, file)
-
-                # Skip ignored files
-                if self._filter_files(file_path):
-                    continue
-
-                # Get the modification time of the current file
-                file_mod_time = os.path.getmtime(file_path)
-
-                # Compare with the most recent file found so far
-                if most_recent_time is None or file_mod_time > most_recent_time:
-                    most_recent_time = file_mod_time
-                    most_recent_file = file_path
-
-        if most_recent_file:
-            print(f"Most recently modified file: {most_recent_file}")
-            self.generate_file_change_json(most_recent_file)
-
 def find_project_folder(path):
     """Checks if there's a project folder in the given path and returns its name."""
     for item in os.listdir(path):
@@ -169,8 +144,33 @@ def find_project_folder(path):
             return item_path
     return None
 
+def get_most_recently_modified_file(folder_path):
+    """Finds and returns the most recently modified file in the folder."""
+    most_recent_file = None
+    most_recent_mtime = 0
+
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if os.path.isfile(file_path):
+                mtime = os.path.getmtime(file_path)
+                if mtime > most_recent_mtime:
+                    most_recent_mtime = mtime
+                    most_recent_file = file_path
+
+    return most_recent_file
+
+def print_most_recent_file_diff(recent_file, handler):
+    """Generates and prints the diff for the most recently modified file using the WatchdogHandler's logic."""
+    if recent_file:
+        print(f"Most recently modified file: {recent_file}")
+        handler.generate_file_change_json(recent_file)
+    else:
+        print("No recently modified file found.")
+
 if __name__ == "__main__":
     workspace_path = 'workspace'  # Path to the workspace folder
+    diffs_path = 'diffs'  # Path to the separate diffs directory
     skip_files = ['package-lock.json', 'yarn.lock']
     
     # Start by checking if a project folder exists inside the workspace
@@ -178,16 +178,19 @@ if __name__ == "__main__":
 
     if project_folder:
         print(f"Project folder found: {project_folder}. Watching the project folder.")
-        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files)
         
-        # Print the most recently modified file
-        event_handler.print_most_recently_modified_file()
-
+        # Initialize the WatchdogHandler
+        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files, diffs_path=diffs_path)
+        
+        # Find and print the most recently modified file and its diff at startup
+        recent_file = get_most_recently_modified_file(project_folder)
+        print_most_recent_file_diff(recent_file, event_handler)
+        
         observer = Observer()
         observer.schedule(event_handler, project_folder, recursive=True)
     else:
         print(f"No project folder found. Watching the workspace folder for new project folder.")
-        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=workspace_path, skip_files=skip_files)
+        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=workspace_path, skip_files=skip_files, diffs_path=diffs_path)
         
         observer = Observer()
         observer.schedule(event_handler, workspace_path, recursive=False)
@@ -198,20 +201,19 @@ if __name__ == "__main__":
         while True:
             time.sleep(1)  # Keep the script running
 
+            # If no project folder was initially found, keep checking for its creation
             if not project_folder:
                 project_folder = find_project_folder(workspace_path)
                 if project_folder:
                     print(f"Project folder detected: {project_folder}. Switching to watch the project folder.")
+                    # Stop watching the workspace folder
                     observer.stop()
                     observer = Observer()  # Create a new observer
-                    event_handler = WatchdogHandler(project_folder=project_folder, skip_files=skip_files)
+                    event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files, diffs_path=diffs_path)
                     
-                    # Print the most recently modified file
-                    event_handler.print_most_recently_modified_file()
-
                     observer.schedule(event_handler, project_folder, recursive=True)
                     observer.start()
-                    break
+                    break  # Stop checking for new project folder after one is found
     except KeyboardInterrupt:
         observer.stop()  # Stop the observer if the user presses Ctrl+C
 
