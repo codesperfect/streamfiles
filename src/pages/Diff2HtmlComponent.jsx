@@ -1,16 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
-import {
-  FaFolderOpen,
-  FaFolder,
-  FaFileAlt,
-  FaFileCsv,
-  FaFilePdf,
-  FaJsSquare,
-  FaPython,
-  FaHtml5,
-} from "react-icons/fa";
+import { FaFolderOpen, FaFolder } from "react-icons/fa";
 import { parse, html } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
+import FileIcon from "../components/FileIcons"; // Importing the new FileIcon component
 
 const WebSocketURL = "ws://localhost:6789"; // Replace with your WebSocket server URL
 
@@ -88,24 +80,6 @@ const Diff2HtmlComponent = () => {
     };
   }, []);
 
-  const getFileIcon = (filename) => {
-    const extension = filename.split(".").pop().toLowerCase();
-    switch (extension) {
-      case "js":
-        return <FaJsSquare className="text-yellow-500 mr-1" />;
-      case "py":
-        return <FaPython className="text-blue-500 mr-1" />;
-      case "html":
-        return <FaHtml5 className="text-orange-600 mr-1" />;
-      case "pdf":
-        return <FaFilePdf className="text-red-500 mr-1" />;
-      case "csv":
-        return <FaFileCsv className="text-teal-600 mr-1" />;
-      default:
-        return <FaFileAlt className="mr-1" />;
-    }
-  };
-
   const renderFileTree = (tree, folderPath = "") => {
     const folderEntries = Object.entries(tree.folders || {});
     const fileEntries = tree.files || [];
@@ -143,8 +117,8 @@ const Diff2HtmlComponent = () => {
             }`}
             onClick={() => handleFileClick(file)}
           >
-            {getFileIcon(file.filename)}
-            <span className="truncate flex-1 ">{file.filename}</span>
+            <FileIcon filename={file.filename} /> {/* Using FileIcon */}
+            <span className="truncate flex-1 text-left">{file.filename}</span>
             {file.diff && (
               <span className="ml-auto sticky right-0">{getDiffCount(file.diff)}</span>
             )}
@@ -205,9 +179,9 @@ const Diff2HtmlComponent = () => {
   return (
     <div className="container mx-auto flex h-screen">
       {/* Sidebar */}
-      <div className="w-48 border-r-2 border-gray-300 p-1 overflow-y-auto overflow-x-hidden pr-5 h-full">
+      <div className="w-64 border-r-2 border-gray-300 p-1 overflow-y-auto overflow-x-hidden h-full">
         <ul>{renderFileTree(fileTree)}</ul>
-      </div>    
+      </div>
 
       {/* Diff Viewer */}
       <div className="w-full p-1 overflow-auto">
