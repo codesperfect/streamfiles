@@ -4,20 +4,75 @@ import json
 import os
 import logging
 from pathlib import Path
-import fnmatch
 from collections import deque
 import difflib
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import time
 
 # Global limit for the number of files to send
-LIMIT = 1
+LIMIT = 5
+DEBOUNCE_DELAY = 1  # 1 second delay to debounce file changes
+
+# List of allowed program file extensions (add more as necessary)
+ALLOWED_EXTENSIONS = {'.py', '.js', '.ts', '.java', '.cpp', '.c', '.rb', '.go', '.sh','.md'}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-
 active_connections = set()
 file_queue = deque(maxlen=LIMIT)  # Set maxlen to LIMIT so deque only holds latest LIMIT items
-BASE_PATH = 'code_gen/'  # Set the base path
+BASE_PATH = '/home/kavia/workspace'  # Set the base path
+sent_files_tracker = {}  # To track recently sent files and debounce
+
+# File change handler for watchdog
+class FileChangeHandler(FileSystemEventHandler):
+    def __init__(self, ignore_patterns):
+        self.ignore_patterns = ignore_patterns
+        self.previous_contents = {}
+
+    def on_modified(self, event):
+        if event.is_directory or should_ignore(Path(event.src_path), self.ignore_patterns):
+            return
+
+        # Process the modified file
+        file_path = event.src_path
+        current_time = time.time()
+
+        # Debounce logic: Only process the file if it hasn't been processed within the debounce delay
+        if file_path in sent_files_tracker and (current_time - sent_files_tracker[file_path]) < DEBOUNCE_DELAY:
+            return  # Skip if the file was modified too recently
+
+        current_content = get_file_content(file_path)
+        
+        if current_content is None:
+            return
+        
+        previous_content = self.previous_contents.get(file_path, "")
+        file_type, language = get_file_info(file_path)
+
+        diff = list(difflib.ndiff(previous_content.splitlines(), current_content.splitlines()))
+
+        # Stream only if there are diffs (i.e., if diff is non-empty)
+        if diff:
+            file_data = {
+                "type": file_type,
+                "filename": file_path,
+                "content": current_content,
+                "previous_content": previous_content,
+                "diff": diff,
+                "language": language,
+                "action": "update"
+            }
+
+            self.previous_contents[file_path] = current_content  # Update previous content to current
+
+            # Add to the file queue (deque will handle max length automatically)
+            file_queue.append(file_data)
+            logging.info(f"File changed: {file_path}")
+
+            # Track the time the file was sent to avoid duplicates
+            sent_files_tracker[file_path] = current_time
 
 def get_ignore_patterns(folder_path):
     ignore_patterns = []
@@ -37,9 +92,10 @@ def should_ignore(path, ignore_patterns):
     path_str = str(path)
     path_parts = Path(path_str).parts
 
-    if path.name == 'main.py':
+    # Skip non-program files by checking the file extension
+    if path.suffix not in ALLOWED_EXTENSIONS:
         return True
-    
+
     if path.name == '.gitignore':
         return True
 
@@ -72,78 +128,55 @@ def get_file_content(file_path):
         logging.warning(f"File {file_path} could not be read as UTF-8. Skipping.")
         return None
 
-async def file_monitor():
-    global file_queue
-    
-    if not os.path.exists(BASE_PATH):
-        logging.error(f"Base path {BASE_PATH} does not exist")
-        return
+def get_recently_modified_files(limit=LIMIT):
+    """Retrieve the most recently modified files within the BASE_PATH."""
+    all_files = []
 
-    subdirs = [BASE_PATH]
-    for item in os.listdir(BASE_PATH):
-        full_path = os.path.join(BASE_PATH, item)
-        if os.path.isdir(full_path):
-            subdirs.append(full_path)
+    for root, dirs, files in os.walk(BASE_PATH):
+        for name in files:
+            file_path = Path(root) / name
+            if file_path.suffix not in ALLOWED_EXTENSIONS:  # Skip non-program files
+                continue
+            try:
+                mtime = os.path.getmtime(file_path)
+                all_files.append((file_path, mtime))
+            except FileNotFoundError:
+                continue
 
-    last_modified_times = {}
-    previous_contents = {}
+    # Sort files by modification time (latest first)
+    all_files.sort(key=lambda x: x[1], reverse=True)
 
-    while True:
-        try:
-            current_files = set()
-            
-            for dir_path in subdirs:
-                ignore_patterns = get_ignore_patterns(dir_path)
-                
-                for root, dirs, files in os.walk(dir_path):
-                    for name in files:
-                        path = Path(root) / name
-                        if not should_ignore(path, ignore_patterns):
-                            current_files.add(str(path))
-                            current_modified_time = os.path.getmtime(path)
-                            current_content = get_file_content(str(path))
+    recent_files = all_files[:limit]  # Limit to the most recent 'limit' files
 
-                            if current_content is None:
-                                continue
+    file_data_list = []
+    for file_path, _ in recent_files:
+        current_content = get_file_content(file_path)
+        if current_content is None:
+            continue
+        
+        file_type, language = get_file_info(file_path)
+        file_data = {
+            "type": file_type,
+            "filename": str(file_path),
+            "content": current_content,
+            "previous_content": "",
+            "diff": [],  # No diff on initial load
+            "language": language,
+            "action": "initial"
+        }
+        file_data_list.append(file_data)
 
-                            if str(path) not in last_modified_times or current_modified_time > last_modified_times[str(path)]:
-                                last_modified_times[str(path)] = current_modified_time
-                                
-                                previous_content = previous_contents.get(str(path), "")
-                                file_type, language = get_file_info(str(path))
-
-                                diff = list(difflib.ndiff(previous_content.splitlines(), current_content.splitlines()))
-
-                                # Stream only if there are diffs (i.e., if diff is non-empty)
-                                if diff:
-                                    file_data = {
-                                        "type": file_type,
-                                        "filename": str(path),
-                                        "content": current_content,
-                                        "previous_content": previous_content,
-                                        "diff": diff,
-                                        "language": language,
-                                        "action": "update"
-                                    }
-
-                                    previous_contents[str(path)] = current_content  # Update previous content to current
-                                    
-                                    # Remove old version if exists and add new file data
-                                    file_queue = deque(filter(lambda x: x['filename'] != str(path), file_queue), maxlen=LIMIT)
-                                    file_queue.append(file_data)
-
-            for path in list(last_modified_times.keys()):
-                if path not in current_files:
-                    del last_modified_times[path]
-                    del previous_contents[path]
-
-        except Exception as e:
-            logging.error(f"Error monitoring files: {e}")
-        await asyncio.sleep(1)
+    return file_data_list
 
 async def send_updates(websocket):
     global file_queue
     try:
+        # Send initially the most recently modified files
+        recent_files = get_recently_modified_files()
+        for file_data in recent_files:
+            await websocket.send(json.dumps(file_data))
+
+        # Continue sending file changes as they come in
         while True:
             if file_queue:
                 file_data = file_queue.popleft()
@@ -162,12 +195,8 @@ async def websocket_handler(websocket, path):
     logging.info(f"New connection from {websocket.remote_address}")
     active_connections.add(websocket)
     try:
-        monitor_task = asyncio.create_task(file_monitor())
         send_task = asyncio.create_task(send_updates(websocket))
-        done, pending = await asyncio.wait(
-            [monitor_task, send_task],
-            return_when=asyncio.FIRST_COMPLETED
-        )
+        done, pending = await asyncio.wait([send_task], return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
     except websockets.exceptions.ConnectionClosed:
@@ -177,9 +206,21 @@ async def websocket_handler(websocket, path):
         logging.info(f"Connection handler completed for {websocket.remote_address}")
 
 async def main():
-    server = await websockets.serve(websocket_handler, "0.0.0.0", 8764)
-    logging.info("WebSocket server started on ws://0.0.0.0:8764")
-    await server.wait_closed()
+    # Start the watchdog observer
+    ignore_patterns = get_ignore_patterns(BASE_PATH)
+    event_handler = FileChangeHandler(ignore_patterns)
+    observer = Observer()
+    observer.schedule(event_handler, BASE_PATH, recursive=True)
+    observer.start()
+
+    try:
+        # Start WebSocket server
+        server = await websockets.serve(websocket_handler, "0.0.0.0", 8763)
+        logging.info("WebSocket server started on ws://0.0.0.0:8763")
+        await server.wait_closed()
+    finally:
+        observer.stop()
+        observer.join()
 
 if __name__ == "__main__":
     try:
