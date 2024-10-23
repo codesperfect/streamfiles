@@ -2,16 +2,24 @@ import time
 import os
 import difflib
 import json
+import asyncio
+import websockets
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from concurrent.futures import ThreadPoolExecutor
+
+connected_clients = set()  # Store connected WebSocket clients
+most_recent_file_data = None  # Store the most recent file change data
 
 class WatchdogHandler(FileSystemEventHandler):
-    def __init__(self, workspace_path, project_folder, skip_files, diffs_path):
+    def __init__(self, workspace_path, project_folder, skip_files, diffs_path, loop):
         super().__init__()
         self.workspace_path = workspace_path
         self.project_folder = project_folder
         self.skip_files = skip_files
         self.diffs_path = diffs_path  # Separate diffs directory
+        self.loop = loop  # Pass in the asyncio event loop
+        self.executor = ThreadPoolExecutor()  # Thread pool for running blocking tasks
         self.ignore_file_list = self._load_gitignore_file()
         os.makedirs(self.diffs_path, exist_ok=True)  # Ensure the diffs directory exists
 
@@ -19,7 +27,6 @@ class WatchdogHandler(FileSystemEventHandler):
         if event.is_directory:
             return
 
-        # Check if the modified file is .gitignore, and reload ignore patterns if it is
         if event.src_path.endswith('.gitignore'):
             self.ignore_file_list = self._load_gitignore_file()
             return
@@ -27,8 +34,11 @@ class WatchdogHandler(FileSystemEventHandler):
         if self._filter_files(event.src_path):
             return
 
-        # Capture the diff and generate meaningful JSON data
-        self.generate_file_change_json(event.src_path)
+        # Log the file modification event
+        print(f"File modified: {os.path.basename(event.src_path)}")
+
+        # Submit the generate_file_change_json task to be run in the event loop
+        asyncio.run_coroutine_threadsafe(self.generate_file_change_json(event.src_path), self.loop)
 
     def on_created(self, event):
         if event.is_directory:
@@ -37,11 +47,16 @@ class WatchdogHandler(FileSystemEventHandler):
         if self._filter_files(event.src_path):
             return
 
-        self.generate_file_change_json(event.src_path)
+        # Log the file creation event
+        print(f"File created: {os.path.basename(event.src_path)}")
 
-    def generate_file_change_json(self, file_path):
+        # Submit the generate_file_change_json task to be run in the event loop
+        asyncio.run_coroutine_threadsafe(self.generate_file_change_json(event.src_path), self.loop)
+
+    async def generate_file_change_json(self, file_path):
         """Generate a JSON structure for the modified file, including previous code, current code, and the diff."""
-        # Get the relative path and filename
+        global most_recent_file_data
+
         relative_path = os.path.relpath(file_path, self.project_folder)
         filename = os.path.basename(file_path)
         file_extension = os.path.splitext(filename)[1]  # Get the file extension
@@ -49,7 +64,6 @@ class WatchdogHandler(FileSystemEventHandler):
         # Define the diff file path where the previous version of this file will be stored in the separate diffs directory
         diff_file_path = os.path.join(self.diffs_path, f"{relative_path.replace('/', '_')}_prev")
 
-        # Read current content of the file
         try:
             with open(file_path, 'r') as f:
                 current_code = f.read()
@@ -57,7 +71,6 @@ class WatchdogHandler(FileSystemEventHandler):
             print(f"Error reading current content of {file_path}: {e}")
             return
 
-        # Read previous content from the diffs, if available
         if os.path.exists(diff_file_path):
             with open(diff_file_path, 'r') as f:
                 previous_code = f.read()
@@ -88,9 +101,15 @@ class WatchdogHandler(FileSystemEventHandler):
             "diff": diff_text
         }
 
-        # Print the JSON structure (or you can save it to a file)
-        json_output = json.dumps(file_change_data, indent=4)
-        print(json_output)  # Print the JSON structure
+        # Suppress printing the full JSON structure
+        # print(json_output)  # Remove or comment this line if you don't want to print the full JSON
+
+        # Update the global most recent file data for WebSocket clients
+        most_recent_file_data = json.dumps(file_change_data, indent=4)
+
+        # Send JSON data to all connected WebSocket clients
+        await send_data_to_clients(most_recent_file_data)
+
 
     def _load_gitignore_file(self):
         """Load the .gitignore file if it exists and return a list of ignored patterns."""
@@ -110,31 +129,59 @@ class WatchdogHandler(FileSystemEventHandler):
 
     def _filter_files(self, file_path):
         """Filters out files based on the .gitignore file content and skip list."""
-        # Get the relative path from the project folder to the file
         relative_file_path = os.path.relpath(file_path, self.project_folder)
         normalized_relative_path = os.path.normpath(relative_file_path)
 
-        # Filter based on hardcoded skip list
         if os.path.basename(file_path) in self.skip_files:
             return True
 
-        # Filter based on the .gitignore file content
         for ignored in self.ignore_file_list:
             ignored = ignored.strip()
-            if ignored.endswith('/'):  # Folder to ignore
+            if ignored.endswith('/'):
                 ignored_folder = os.path.normpath(ignored.rstrip('/'))
                 if normalized_relative_path.startswith(ignored_folder):
                     return True
-
-            elif ignored.startswith('*.'):  # File extension to ignore
+            elif ignored.startswith('*.'):
                 ext = ignored.lstrip('*.')
                 if normalized_relative_path.endswith(ext):
                     return True
-
-            elif ignored == normalized_relative_path:  # Specific file to ignore
+            elif ignored == normalized_relative_path:
                 return True
 
         return False
+
+
+async def send_data_to_clients(data):
+    """Send data to all connected WebSocket clients."""
+    if connected_clients:
+        await asyncio.wait([client.send(data) for client in connected_clients])
+
+
+async def websocket_handler(websocket, path):
+    """Handle WebSocket connections."""
+    global most_recent_file_data
+
+    print(f"Client connected: {websocket.remote_address}")
+    connected_clients.add(websocket)
+
+    # Send the most recent file diff to the newly connected client
+    if most_recent_file_data:
+        await websocket.send(most_recent_file_data)
+
+    try:
+        async for message in websocket:
+            pass  # Keep the connection alive
+    except websockets.ConnectionClosed:
+        print(f"Client disconnected: {websocket.remote_address}")
+    finally:
+        connected_clients.remove(websocket)
+
+
+async def start_websocket_server():
+    """Start the WebSocket server."""
+    server = await websockets.serve(websocket_handler, "localhost", 6789)
+    await server.wait_closed()
+
 
 def find_project_folder(path):
     """Checks if there's a project folder in the given path and returns its name."""
@@ -160,61 +207,47 @@ def get_most_recently_modified_file(folder_path):
 
     return most_recent_file
 
-def print_most_recent_file_diff(recent_file, handler):
+async def print_most_recent_file_diff(recent_file, handler):
     """Generates and prints the diff for the most recently modified file using the WatchdogHandler's logic."""
     if recent_file:
         print(f"Most recently modified file: {recent_file}")
-        handler.generate_file_change_json(recent_file)
+        await handler.generate_file_change_json(recent_file)
     else:
         print("No recently modified file found.")
 
-if __name__ == "__main__":
-    workspace_path = 'workspace'  # Path to the workspace folder
-    diffs_path = 'diffs'  # Path to the separate diffs directory
+async def main():
+    workspace_path = 'workspace'
+    diffs_path = 'diffs'
     skip_files = ['package-lock.json', 'yarn.lock']
-    
-    # Start by checking if a project folder exists inside the workspace
+
     project_folder = find_project_folder(workspace_path)
 
     if project_folder:
         print(f"Project folder found: {project_folder}. Watching the project folder.")
-        
-        # Initialize the WatchdogHandler
-        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files, diffs_path=diffs_path)
-        
-        # Find and print the most recently modified file and its diff at startup
+
+        loop = asyncio.get_event_loop()
+        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files, diffs_path=diffs_path, loop=loop)
         recent_file = get_most_recently_modified_file(project_folder)
-        print_most_recent_file_diff(recent_file, event_handler)
-        
+        await print_most_recent_file_diff(recent_file, event_handler)
+
         observer = Observer()
         observer.schedule(event_handler, project_folder, recursive=True)
+        observer.start()
+
+        # Run WebSocket server concurrently
+        await start_websocket_server()
+
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            observer.stop()
+
+        observer.join()
+
     else:
-        print(f"No project folder found. Watching the workspace folder for new project folder.")
-        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=workspace_path, skip_files=skip_files, diffs_path=diffs_path)
-        
-        observer = Observer()
-        observer.schedule(event_handler, workspace_path, recursive=False)
+        print("No project folder found.")
 
-    observer.start()
-
-    try:
-        while True:
-            time.sleep(1)  # Keep the script running
-
-            # If no project folder was initially found, keep checking for its creation
-            if not project_folder:
-                project_folder = find_project_folder(workspace_path)
-                if project_folder:
-                    print(f"Project folder detected: {project_folder}. Switching to watch the project folder.")
-                    # Stop watching the workspace folder
-                    observer.stop()
-                    observer = Observer()  # Create a new observer
-                    event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files, diffs_path=diffs_path)
-                    
-                    observer.schedule(event_handler, project_folder, recursive=True)
-                    observer.start()
-                    break  # Stop checking for new project folder after one is found
-    except KeyboardInterrupt:
-        observer.stop()  # Stop the observer if the user presses Ctrl+C
-
-    observer.join()
+# Run the asyncio event loop
+if __name__ == "__main__":
+    asyncio.run(main())
