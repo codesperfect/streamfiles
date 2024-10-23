@@ -3,6 +3,9 @@ import { FaFolderOpen, FaFolder } from "react-icons/fa";
 import { parse, html } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
 import FileIcon from "../components/FileIcons"; // Importing the new FileIcon component
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
+import {prism } from 'react-syntax-highlighter/dist/esm/styles/prism'; // Import Prism light theme
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const WebSocketURL = "ws://localhost:6789"; // Replace with your WebSocket server URL
 
@@ -158,9 +161,43 @@ const Diff2HtmlComponent = () => {
     }));
   };
 
+  const getLanguageByExtension = (filename) => {
+    const extension = filename.split('.').pop().toLowerCase();
+    switch (extension) {
+      case 'js':
+        return 'javascript';
+      case 'py':
+        return 'python';
+      case 'html':
+      case 'xml':
+        return 'html';
+      case 'css':
+        return 'css';
+      case 'json':
+        return 'json';
+      case 'md':
+        return 'markdown';
+      default:
+        return null; // Fallback to no highlighting if unknown extension
+    }
+  };
+
   const renderDiff = (file) => {
     if (!file.diff || file.diff.trim() === "") {
-      setDiffHtml(`<pre>${file.current_code}</pre>`);
+        const language = getLanguageByExtension(file.filename); // Dynamically determine language
+        setDiffHtml(
+          <SyntaxHighlighter
+            language={language}  // Dynamically use the correct language
+            style={prism}  // Prism light theme
+            wrapLines={false}
+            showLineNumbers={true}  // Optional line numbers
+            lineProps={{
+              style: { whiteSpace: 'pre', wordBreak: 'normal' }, // Handle long lines
+            }}
+          >
+            {file.current_code}
+          </SyntaxHighlighter>
+        );
     } else {
       const diffOutput = parse(file.diff);
       const prettyHtml = html(diffOutput, { outputFormat: "line-by-line" });
@@ -188,10 +225,14 @@ const Diff2HtmlComponent = () => {
         <h3 className="text-lg font-semibold mb-1">
           {selectedFile ? selectedFile.filename : latestStreamedFile?.filename || "Latest Streamed File"}
         </h3>
-        <div
-          className="bg-white border border-gray-300 p-2 rounded shadow overflow-x-auto"
-          dangerouslySetInnerHTML={{ __html: diffHtml }}
-        />
+        <div className="bg-white border border-gray-300 p-2 rounded shadow overflow-x-auto">
+        {/* Conditionally render JSX component or raw HTML */}
+        {typeof diffHtml === "string" ? (
+          <div dangerouslySetInnerHTML={{ __html: diffHtml }} />
+        ) : (
+          diffHtml // Render JSX (like SyntaxHighlighter)
+        )}
+      </div>
       </div>
     </div>
   );
