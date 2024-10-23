@@ -36,3 +36,21 @@
     transform: rotate(360deg);
   }
 }
+.file-item {
+  padding: 5px;
+  cursor: pointer;
+}
+
+.file-item.selected {
+  background-color: #e0e0e0;
+}
+
+.file-changes {
+  margin-left: 10px;
+}
+
+.folder-icon,
+.file-icon {
+  margin-right: 5px;
+}
+

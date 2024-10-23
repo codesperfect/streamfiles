@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'; // Light theme
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import DiffMatchPatch from 'diff-match-patch';
 
 const dmp = new DiffMatchPatch();
@@ -8,13 +8,26 @@ const dmp = new DiffMatchPatch();
 const CodeStreamViewer = () => {
   const [fileQueue, setFileQueue] = useState([]);
   const [displayedFiles, setDisplayedFiles] = useState([]);
-  const [currentStreaming, setCurrentStreaming] = useState(null);
   const [status, setStatus] = useState('Initializing...');
   const [error, setError] = useState(null);
   const ws = useRef(null);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
   const codeContainerRef = useRef(null);
+
+
+  const convertWatchUrl = (url, port) => {
+    console.log("url", url);
+    if (!url) return '';
+    
+    // Take only the first IP match if there are multiple
+    const match = url.match(/(\d+\.\d+\.\d+\.\d+)/);
+    if (match) {
+        // Use match[1] to get just the IP address from the match
+        return `ws://${match[1]}:${port}`;
+    }
+    return '';
+  }
 
   const connectWebSocket = () => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
@@ -25,9 +38,9 @@ const CodeStreamViewer = () => {
     setStatus(`Attempting to connect (Attempt ${reconnectAttempts.current + 1})...`);
     setError(null);
 
-    const wsUrl = 'ws://localhost:8764';
+    const wsUrl = 'ws://localhost:8763';
     ws.current = new WebSocket(wsUrl);
-    
+
     ws.current.onopen = () => {
       setStatus('Connected');
       setError(null);
@@ -67,26 +80,19 @@ const CodeStreamViewer = () => {
   }, []);
 
   useEffect(() => {
-    const streamNextFile = async () => {
-      if (fileQueue.length > 0 && !currentStreaming) {
-        const nextFile = fileQueue[0];
-        setCurrentStreaming(nextFile.filename);
+    if (fileQueue.length > 0) {
+      const nextFile = fileQueue[0];
+      const previousContent = nextFile.previous_content || '';
+      const currentContent = nextFile.content || '';
 
-        const previousContent = nextFile.previous_content || '';
-        const currentContent = nextFile.content || '';
+      setDisplayedFiles((prev) => [
+        ...prev.filter((f) => f.filename !== nextFile.filename),
+        { ...nextFile, previousContent, currentContent }
+      ]);
 
-        setDisplayedFiles(prev => [
-          ...prev.filter(f => f.filename !== nextFile.filename),
-          { ...nextFile, previousContent, currentContent }
-        ]);
-
-        setFileQueue(prev => prev.slice(1));
-        setCurrentStreaming(null);
-      }
-    };
-
-    streamNextFile();
-  }, [fileQueue, currentStreaming]);
+      setFileQueue((prevQueue) => prevQueue.slice(1));
+    }
+  }, [fileQueue]);
 
   useEffect(() => {
     if (codeContainerRef.current) {
@@ -94,30 +100,105 @@ const CodeStreamViewer = () => {
     }
   }, [displayedFiles]);
 
-  // Modify diffs to generate styled React elements for inserted/removed content
   const generateDiffElements = (previousContent, currentContent, language) => {
     const diffs = dmp.diff_main(previousContent, currentContent);
     dmp.diff_cleanupSemantic(diffs);
-
-    return diffs.map((part, index) => {
-      const [type, text] = part;
-
+  
+    if (diffs.length === 0) {
+      // No diffs found, return the entire current content as unchanged
+      return (
+        <SyntaxHighlighter
+          language={language}
+          style={vscDarkPlus}
+          wrapLines={false}
+          showLineNumbers={true}
+          lineProps={{
+            style: { whiteSpace: 'pre', wordBreak: 'normal' },
+          }}
+        >
+          {currentContent}
+        </SyntaxHighlighter>
+      );
+    }
+  
+    // Combine continuous changes into one block
+    const combinedDiffs = [];
+    let currentBlock = { type: diffs[0][0], text: diffs[0][1] };
+  
+    for (let i = 1; i < diffs.length; i++) {
+      if (diffs[i][0] === currentBlock.type && !diffs[i][1].includes('\n')) {
+        currentBlock.text += diffs[i][1];
+      } else {
+        combinedDiffs.push(currentBlock);
+        currentBlock = { type: diffs[i][0], text: diffs[i][1] };
+      }
+    }
+    combinedDiffs.push(currentBlock);
+  
+    return combinedDiffs.map((part, index) => {
+      const { type, text } = part;
+  
       if (type === DiffMatchPatch.DIFF_DELETE) {
-        // Removed content (deleted content) with red color and strikethrough
         return (
-          <span key={index} style={{ color: 'red', textDecoration: 'line-through' }}>
-            {text + '\n'}
-          </span>
+          <div
+            key={index}
+            className="p-1 my-1 bg-red-100 rounded-lg"
+            style={{
+              backgroundColor: 'rgba(255, 0, 0, 0.15)',  // Light red background
+              textDecoration: 'line-through',
+            }}
+          >
+            <SyntaxHighlighter
+              language={language}
+              style={vscDarkPlus}
+              wrapLines={false}
+              showLineNumbers={true}
+              customStyle={{
+                margin: 0,
+                backgroundColor: "transparent", // Transparent background to highlight only the diff
+              }}
+              lineProps={{
+                style: { whiteSpace: 'pre', wordBreak: 'normal' },
+              }}
+            >
+              {text}
+            </SyntaxHighlighter>
+          </div>
+        );
+      } else if (type === DiffMatchPatch.DIFF_INSERT) {
+        return (
+          <div
+            key={index}
+            className="p-1 my-1 bg-green-100 rounded-lg"
+            style={{
+              backgroundColor: 'rgba(0, 255, 0, 0.15)',  // Light green background
+            }}
+          >
+            <SyntaxHighlighter
+              language={language}
+              style={vscDarkPlus}
+              wrapLines={false}
+              showLineNumbers={true}
+              customStyle={{
+                margin: 0,
+                backgroundColor: "transparent",
+              }}
+              lineProps={{
+                style: { whiteSpace: 'pre', wordBreak: 'normal' },
+              }}
+            >
+              {text}
+            </SyntaxHighlighter>
+          </div>
         );
       } else {
-        // Inserted or unchanged content
         return (
           <SyntaxHighlighter
             key={index}
             language={language}
-            style={vscDarkPlus} // Use a light theme for code highlighting
-            showLineNumbers={true} // Show line numbers
-            wrapLines={false} // Don't wrap lines, display as is
+            style={vscDarkPlus}
+            wrapLines={false}
+            showLineNumbers={true}
             lineProps={{
               style: { whiteSpace: 'pre', wordBreak: 'normal' },
             }}
@@ -128,12 +209,13 @@ const CodeStreamViewer = () => {
       }
     });
   };
+  
 
   const renderFileContent = (fileData) => {
     const diffElements = generateDiffElements(fileData.previousContent, fileData.currentContent, fileData.language);
 
     return (
-      <div style={{  borderRadius: '20px' }}> {/* Light background */}
+      <div className="rounded-lg overflow-hidden">
         {diffElements}
       </div>
     );
