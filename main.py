@@ -100,6 +100,7 @@ class WatchdogHandler(FileSystemEventHandler):
             "current_code": current_code,
             "diff": diff_text
         }
+        print(file_change_data)
 
         # Update the global most recent file data for WebSocket clients
         most_recent_file_data = json.dumps(file_change_data, indent=4)
@@ -216,33 +217,50 @@ async def main():
     diffs_path = 'diffs'
     skip_files = ['package-lock.json', 'yarn.lock']
 
-    project_folder = find_project_folder(workspace_path)
+    loop = asyncio.get_event_loop()
 
-    if project_folder:
-        print(f"Project folder found: {project_folder}. Watching the project folder.")
+    while True:
+        # Check if a project folder is available inside the workspace
+        project_folder = find_project_folder(workspace_path)
 
-        loop = asyncio.get_event_loop()
-        event_handler = WatchdogHandler(workspace_path=workspace_path, project_folder=project_folder, skip_files=skip_files, diffs_path=diffs_path, loop=loop)
-        recent_file = get_most_recently_modified_file(project_folder)
-        await print_most_recent_file_diff(recent_file, event_handler)
+        if project_folder:
+            print(f"Project folder found: {project_folder}. Watching the project folder.")
 
-        observer = Observer()
-        observer.schedule(event_handler, project_folder, recursive=True)
-        observer.start()
+            event_handler = WatchdogHandler(
+                workspace_path=workspace_path,
+                project_folder=project_folder,
+                skip_files=skip_files,
+                diffs_path=diffs_path,
+                loop=loop
+            )
+            
+            recent_file = get_most_recently_modified_file(project_folder)
+            await print_most_recent_file_diff(recent_file, event_handler)
 
-        # Run WebSocket server concurrently
-        await start_websocket_server()
+            observer = Observer()
+            observer.schedule(event_handler, project_folder, recursive=True)
+            observer.start()
 
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            observer.stop()
+            # Run WebSocket server concurrently
+            server_task = asyncio.create_task(start_websocket_server())
 
-        observer.join()
+            try:
+                # Keep the observer running until the project folder is deleted
+                while os.path.exists(project_folder):
+                    await asyncio.sleep(1)
+            except KeyboardInterrupt:
+                break
+            finally:
+                observer.stop()
+                observer.join()
+                server_task.cancel()
 
-    else:
-        print("No project folder found.")
+            print("Project folder removed. Waiting for a new project to be available...")
+        else:
+            print("No project folder found. Waiting for a project to be available...")
+
+        # Wait a few seconds before checking again for a new project
+        await asyncio.sleep(5)
 
 # Run the asyncio event loop
 if __name__ == "__main__":
