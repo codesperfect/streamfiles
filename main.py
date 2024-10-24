@@ -7,6 +7,7 @@ import websockets
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from concurrent.futures import ThreadPoolExecutor
+import fnmatch
 
 connected_clients = set()  # Store connected WebSocket clients
 most_recent_file_data = None  # Store the most recent file change data
@@ -101,7 +102,6 @@ class WatchdogHandler(FileSystemEventHandler):
             "current_code": current_code,
             "diff": diff_text
         }
-        print(file_change_data)
 
         # Update the global most recent file data for WebSocket clients
         most_recent_file_data = json.dumps(file_change_data, indent=4)
@@ -126,25 +126,46 @@ class WatchdogHandler(FileSystemEventHandler):
         return ignore_list
 
     def _filter_files(self, file_path):
-        """Filters out files based on the .gitignore file content and skip list."""
+        """Enhanced filter to match against .gitignore-like patterns."""
         relative_file_path = os.path.relpath(file_path, self.project_folder)
         normalized_relative_path = os.path.normpath(relative_file_path)
 
+        # Check if the file is in the skip files list
         if os.path.basename(file_path) in self.skip_files:
             return True
 
-        for ignored in self.ignore_file_list:
-            ignored = ignored.strip()
-            if ignored.endswith('/'):
-                ignored_folder = os.path.normpath(ignored.rstrip('/'))
-                if normalized_relative_path.startswith(ignored_folder):
+        for pattern in self.ignore_file_list:
+            pattern = pattern.strip()
+
+            # Skip empty lines or comments in .gitignore
+            if not pattern or pattern.startswith('#'):
+                continue
+
+            # Normalize pattern paths
+            normalized_pattern = os.path.normpath(pattern)
+
+            # Handle directory patterns (e.g., /node_modules/)
+            if normalized_pattern.endswith('/'):
+                normalized_pattern = normalized_pattern.rstrip('/')
+                
+                # Match folders and files within them
+                if normalized_relative_path.startswith(normalized_pattern):
                     return True
-            elif ignored.startswith('*.'):
-                ext = ignored.lstrip('*.')
-                if normalized_relative_path.endswith(ext):
+
+            # Wildcard patterns (e.g., *.log, npm-debug.log*)
+            if '*' in normalized_pattern or '?' in normalized_pattern:
+                if fnmatch.fnmatch(normalized_relative_path, normalized_pattern):
                     return True
-            elif ignored == normalized_relative_path:
+
+            # Exact file or directory match
+            if normalized_pattern == normalized_relative_path:
                 return True
+
+            # Handle leading slash (e.g., /node_modules or /build)
+            if normalized_pattern.startswith('/'):
+                normalized_pattern = normalized_pattern.lstrip('/')
+                if normalized_relative_path.startswith(normalized_pattern):
+                    return True
 
         return False
 
@@ -189,14 +210,19 @@ def find_project_folder(path):
             return item_path
     return None
 
-def get_most_recently_modified_file(folder_path):
-    """Finds and returns the most recently modified file in the folder."""
+def get_most_recently_modified_file(folder_path, handler):
+    """Finds and returns the most recently modified file in the folder that isn't ignored by .gitignore."""
     most_recent_file = None
     most_recent_mtime = 0
 
     for root, dirs, files in os.walk(folder_path):
         for file in files:
             file_path = os.path.join(root, file)
+            
+            # Check if the file should be ignored based on .gitignore patterns
+            if handler._filter_files(file_path):
+                continue  # Skip ignored files
+
             if os.path.isfile(file_path):
                 mtime = os.path.getmtime(file_path)
                 if mtime > most_recent_mtime:
@@ -204,6 +230,7 @@ def get_most_recently_modified_file(folder_path):
                     most_recent_file = file_path
 
     return most_recent_file
+
 
 async def print_most_recent_file_diff(recent_file, handler):
     """Generates and prints the diff for the most recently modified file using the WatchdogHandler's logic."""
@@ -235,7 +262,7 @@ async def main():
                 loop=loop
             )
             
-            recent_file = get_most_recently_modified_file(project_folder)
+            recent_file = get_most_recently_modified_file(project_folder, event_handler)
             await print_most_recent_file_diff(recent_file, event_handler)
 
             observer = Observer()

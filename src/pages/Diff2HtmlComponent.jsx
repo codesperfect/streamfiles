@@ -2,104 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { FaFolderOpen, FaFolder, FaSearch } from "react-icons/fa";
 import { parse, html } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import FileIcon from "../components/FileIcons";
+import StreamingContent from "./StreamingContent";
 
 const WebSocketURL = "ws://localhost:6789";
 
-// Streaming content components
-const StreamingContent = ({ content, language, speed = 10 }) => {
-  const [visibleLines, setVisibleLines] = useState([]);
-  const [isComplete, setIsComplete] = useState(false);
-  const containerRef = useRef(null);
-  
-  // Auto-scroll function
-  const scrollToBottom = () => {
-    if (containerRef.current) {
-      const scrollContainer = containerRef.current.querySelector('pre');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
-    }
-  };
-  
-  useEffect(() => {
-    if (!content) return;
-    
-    // Split content into lines and filter out undefined
-    const lines = content.split('\n').filter(line => line !== undefined);
-    
-    // Reset state
-    setVisibleLines([]);
-    setIsComplete(false);
-    
-    // Immediately show the first line
-    setVisibleLines([lines[0]]);
-    
-    let currentIndex = 1; // Start from second line since we showed first line
-    
-    const addNextLine = () => {
-      if (currentIndex < lines.length) {
-        setVisibleLines(prev => [...prev, lines[currentIndex]]);
-        currentIndex++;
-        timeoutId = setTimeout(addNextLine, speed);
-        // Scroll after adding new line
-        setTimeout(scrollToBottom, 0);
-      } else {
-        setIsComplete(true);
-      }
-    };
-
-    let timeoutId = setTimeout(addNextLine, speed);
-
-    return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [content, speed]);
-
-  // Scroll when content updates
-  useEffect(() => {
-    scrollToBottom();
-  }, [visibleLines]);
-
-  if (!content) return null;
-
-  return (
-    <div className="relative" ref={containerRef}>
-      <SyntaxHighlighter
-        language={language}
-        style={oneLight}
-        showLineNumbers={true}
-        customStyle={{
-          margin: 0,
-          borderRadius: '0.375rem',
-          background: '#ffffff',
-          fontSize: '12px',
-          lineHeight: '1.4',
-          padding: '0.75rem',
-          maxHeight: '600px',  // Set a max height to enable scrolling
-          overflow: 'auto'     // Enable scrolling
-        }}
-        codeTagProps={{
-          style: {
-            fontSize: '12px',
-            lineHeight: '1.4'
-          }
-        }}
-      >
-        {visibleLines.join('\n')}
-      </SyntaxHighlighter>
-      {!isComplete && (
-        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white to-transparent" />
-      )}
-    </div>
-  );
-};
-
-const DiffStreamingContent = React.memo(({ diffContent, speed = 10 }) => {
+const DiffStreamingContent = React.memo(({ diffContent, speed = 1.5 }) => {
   const [visibleHtml, setVisibleHtml] = useState('');
   const [isComplete, setIsComplete] = useState(false);
   const containerRef = useRef(null);
@@ -239,7 +147,7 @@ const Diff2HtmlComponent = () => {
       setDiffHtml(
         <StreamingContent 
           content={file.current_code || ''} 
-          language={language}
+          language={'js'}
         />
       );
     } else {
@@ -250,7 +158,7 @@ const Diff2HtmlComponent = () => {
         drawFileList: false,
       });
       setDiffHtml(
-        <DiffStreamingContent diffContent={prettyHtml} />
+        <DiffStreamingContent diffContent={prettyHtml} fileName={file.filename} />
       );
     }
   };
