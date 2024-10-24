@@ -1,5 +1,5 @@
 import time
-import os
+import os,sys
 import difflib
 import json
 import asyncio
@@ -83,7 +83,8 @@ class WatchdogHandler(FileSystemEventHandler):
             current_code.splitlines(),
             lineterm='',
             fromfile='previous_code',
-            tofile='current_code'
+            tofile='current_code',
+            n=sys.maxsize
         )
         diff_text = "\n".join(diff)
 

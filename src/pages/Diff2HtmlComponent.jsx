@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { FaFolderOpen, FaFolder, FaSearch } from "react-icons/fa";
 import { parse, html } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
@@ -12,32 +12,63 @@ const WebSocketURL = "ws://localhost:6789";
 const StreamingContent = ({ content, language, speed = 10 }) => {
   const [visibleLines, setVisibleLines] = useState([]);
   const [isComplete, setIsComplete] = useState(false);
+  const containerRef = useRef(null);
+  
+  // Auto-scroll function
+  const scrollToBottom = () => {
+    if (containerRef.current) {
+      const scrollContainer = containerRef.current.querySelector('pre');
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+    }
+  };
   
   useEffect(() => {
     if (!content) return;
     
-    const lines = content.split('\n');
+    // Split content into lines and filter out undefined
+    const lines = content.split('\n').filter(line => line !== undefined);
+    
+    // Reset state
     setVisibleLines([]);
     setIsComplete(false);
     
-    let currentIndex = 0;
-    const interval = setInterval(() => {
+    // Immediately show the first line
+    setVisibleLines([lines[0]]);
+    
+    let currentIndex = 1; // Start from second line since we showed first line
+    
+    const addNextLine = () => {
       if (currentIndex < lines.length) {
         setVisibleLines(prev => [...prev, lines[currentIndex]]);
         currentIndex++;
+        timeoutId = setTimeout(addNextLine, speed);
+        // Scroll after adding new line
+        setTimeout(scrollToBottom, 0);
       } else {
         setIsComplete(true);
-        clearInterval(interval);
       }
-    }, speed);
+    };
 
-    return () => clearInterval(interval);
+    let timeoutId = setTimeout(addNextLine, speed);
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, [content, speed]);
+
+  // Scroll when content updates
+  useEffect(() => {
+    scrollToBottom();
+  }, [visibleLines]);
 
   if (!content) return null;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <SyntaxHighlighter
         language={language}
         style={oneLight}
@@ -45,7 +76,18 @@ const StreamingContent = ({ content, language, speed = 10 }) => {
         customStyle={{
           margin: 0,
           borderRadius: '0.375rem',
-          background: '#ffffff'
+          background: '#ffffff',
+          fontSize: '12px',
+          lineHeight: '1.4',
+          padding: '0.75rem',
+          maxHeight: '600px',  // Set a max height to enable scrolling
+          overflow: 'auto'     // Enable scrolling
+        }}
+        codeTagProps={{
+          style: {
+            fontSize: '12px',
+            lineHeight: '1.4'
+          }
         }}
       >
         {visibleLines.join('\n')}
@@ -57,42 +99,75 @@ const StreamingContent = ({ content, language, speed = 10 }) => {
   );
 };
 
-const DiffStreamingContent = ({ diffContent, speed = 10 }) => {
+const DiffStreamingContent = React.memo(({ diffContent, speed = 10 }) => {
   const [visibleHtml, setVisibleHtml] = useState('');
   const [isComplete, setIsComplete] = useState(false);
+  const containerRef = useRef(null);
+  
+  const scrollToBottom = useCallback(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, []);
   
   useEffect(() => {
     if (!diffContent) return;
     
-    const diffLines = diffContent.split('\n');
+    // Split and clean up the content
+    let diffLines = diffContent
+      .split('\n')
+      .filter(Boolean) // Remove empty lines, undefined, and null
+      .map(line => line.replace(/\r$/, '')); // Remove carriage returns
+      
     setVisibleHtml('');
     setIsComplete(false);
     
     let currentIndex = 0;
-    const interval = setInterval(() => {
+    let accumulated = '';
+    
+    const addNextLine = () => {
       if (currentIndex < diffLines.length) {
-        setVisibleHtml(prev => prev + diffLines[currentIndex] + '\n');
+        const currentLine = diffLines[currentIndex];
+        accumulated += currentIndex === 0 ? currentLine : '\n' + currentLine;
+        setVisibleHtml(accumulated);
         currentIndex++;
+        timeoutId = setTimeout(addNextLine, speed);
+        setTimeout(scrollToBottom, 0);
       } else {
         setIsComplete(true);
-        clearInterval(interval);
       }
-    }, speed);
+    };
 
-    return () => clearInterval(interval);
-  }, [diffContent, speed]);
+    let timeoutId = setTimeout(addNextLine, speed);
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [diffContent, speed, scrollToBottom]);
 
   if (!diffContent) return null;
 
   return (
     <div className="relative">
-      <div className="diff-container" dangerouslySetInnerHTML={{ __html: visibleHtml }} />
+      <div 
+        ref={containerRef}
+        className="diff-container" 
+        style={{ 
+          fontSize: '12px', 
+          lineHeight: '1.4',
+          maxHeight: '600px',
+          overflow: 'auto'
+        }}
+        dangerouslySetInnerHTML={{ __html: visibleHtml }} 
+      />
       {!isComplete && (
         <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white to-transparent" />
       )}
     </div>
   );
-};
+});
 
 const Diff2HtmlComponent = () => {
   const [files, setFiles] = useState([]);
@@ -144,6 +219,42 @@ const Diff2HtmlComponent = () => {
     );
   };
 
+  const renderDiff = (file) => {
+    if (!file) return;
+  
+    // Safe check to prevent unnecessary re-renders
+    if (
+      selectedFile?.filepath === file.filepath && 
+      diffHtml && 
+      !file.diff && 
+      diffHtml.type === StreamingContent &&
+      // Only skip if the content hasn't changed
+      file.current_code === selectedFile.current_code
+    ) {
+      return;
+    }
+  
+    if (!file.diff || file.diff.trim() === "") {
+      const language = file.extension.replace('.', '');
+      setDiffHtml(
+        <StreamingContent 
+          content={file.current_code || ''} 
+          language={language}
+        />
+      );
+    } else {
+      const diffOutput = parse(file.diff);
+      const prettyHtml = html(diffOutput, {
+        outputFormat: "line-by-line",
+        matching: 'lines',
+        drawFileList: false,
+      });
+      setDiffHtml(
+        <DiffStreamingContent diffContent={prettyHtml} />
+      );
+    }
+  };
+
   const connectWebSocket = () => {
     ws.current = new WebSocket(WebSocketURL);
 
@@ -167,7 +278,9 @@ const Diff2HtmlComponent = () => {
           [fileData.filepath]: fileData
         }));
 
-        if (!selectedFile) {
+        // Only update latestStreamedFile and render if no file is selected
+        // or if the update is for the selected file
+        if (!selectedFile || (selectedFile && selectedFile.filepath === fileData.filepath)) {
           setLatestStreamedFile(fileData);
           renderDiff(fileData);
         }
@@ -195,37 +308,24 @@ const Diff2HtmlComponent = () => {
     };
   }, []);
 
-  const renderDiff = (file) => {
-    if (!file) return;
-
-    if (!file.diff || file.diff.trim() === "") {
-      const language = file.extension.replace('.', '');
-      setDiffHtml(
-        <StreamingContent 
-          content={file.current_code || ''} 
-          language={language}
-        />
-      );
-    } else {
-      const diffOutput = parse(file.diff);
-      const prettyHtml = html(diffOutput, {
-        outputFormat: "line-by-line",
-        matching: 'lines',
-        drawFileList: false,
-      });
-      setDiffHtml(
-        <DiffStreamingContent diffContent={prettyHtml} />
-      );
+  useEffect(() => {
+    if (selectedFile && streamedUpdates[selectedFile.filepath]) {
+      setSelectedFile(prev => ({
+        ...prev,
+        ...streamedUpdates[selectedFile.filepath]
+      }));
+      renderDiff(streamedUpdates[selectedFile.filepath]);
     }
-  };
+  }, [streamedUpdates]);
 
+  // Add a separate useEffect for handling initial render and file selection
   useEffect(() => {
     if (selectedFile) {
       renderDiff(selectedFile);
     } else if (latestStreamedFile) {
       renderDiff(latestStreamedFile);
     }
-  }, [selectedFile, latestStreamedFile]);
+  }, [selectedFile]); // Only depend on selectedFile changes
 
   const handleFileClick = (file) => {
     if (selectedFile && file.filepath === selectedFile.filepath) {
@@ -246,15 +346,6 @@ const Diff2HtmlComponent = () => {
       [folderPath]: !prevOpenFolders[folderPath],
     }));
   };
-
-  useEffect(() => {
-    if (selectedFile && streamedUpdates[selectedFile.filepath]) {
-      setSelectedFile(prev => ({
-        ...prev,
-        ...streamedUpdates[selectedFile.filepath]
-      }));
-    }
-  }, [streamedUpdates]);
 
   const renderFileTree = (tree, folderPath = "") => {
     const folderEntries = Object.entries(tree.folders || {});
