@@ -101,15 +101,11 @@ class WatchdogHandler(FileSystemEventHandler):
             "diff": diff_text
         }
 
-        # Suppress printing the full JSON structure
-        # print(json_output)  # Remove or comment this line if you don't want to print the full JSON
-
         # Update the global most recent file data for WebSocket clients
         most_recent_file_data = json.dumps(file_change_data, indent=4)
 
         # Send JSON data to all connected WebSocket clients
         await send_data_to_clients(most_recent_file_data)
-
 
     def _load_gitignore_file(self):
         """Load the .gitignore file if it exists and return a list of ignored patterns."""
